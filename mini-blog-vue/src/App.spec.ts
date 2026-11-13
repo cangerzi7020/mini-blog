@@ -24,10 +24,19 @@ const deferred = <T>() => {
   return { promise, resolve }
 }
 
-const post = (id: string, createdAt = 1, content = `第 ${id} 条`): Post => ({
+const post = (
+  id: string,
+  createdAt = 1,
+  content = `第 ${id} 条`,
+  extra: Partial<Post> = {}
+): Post => ({
   id,
   content,
-  createdAt
+  createdAt,
+  likes: 0,
+  liked: false,
+  bookmarked: false,
+  ...extra
 })
 
 beforeEach(() => {

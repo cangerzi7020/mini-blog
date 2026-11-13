@@ -23,6 +23,13 @@ export class ApiError extends Error {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
+/** 点赞数：缺失或非法时回退为 0，避免旧服务端把整条内容判为脏数据 */
+const toCount = (value: unknown): number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0
+
+/** 布尔状态位：只认字面 true，其余一律视为 false */
+const toFlag = (value: unknown): boolean => value === true
+
 /** 把未知形状的条目收窄为 Post，脏数据返回 null */
 function toPost(value: unknown): Post | null {
   if (!isRecord(value)) return null
@@ -33,7 +40,14 @@ function toPost(value: unknown): Post | null {
   if (typeof content !== 'string') return null
   if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return null
 
-  return { id, content, createdAt }
+  return {
+    id,
+    content,
+    createdAt,
+    likes: toCount(value.likes),
+    liked: toFlag(value.liked),
+    bookmarked: toFlag(value.bookmarked)
+  }
 }
 
 /** 被 AbortController 取消的请求不算接口错误，原样抛给调用方 */
@@ -66,9 +80,9 @@ async function toApiError(response: Response): Promise<ApiError> {
 }
 
 /** 统一的 fetch 包装：网络异常与取消分别处理 */
-async function send(init: RequestInit): Promise<Response> {
+async function send(path: string, init: RequestInit): Promise<Response> {
   try {
-    return await fetch(ENDPOINT, init)
+    return await fetch(path, init)
   } catch (error) {
     if (isAbortError(error)) throw error
     throw networkError()
@@ -89,7 +103,7 @@ async function readJson(response: Response): Promise<unknown> {
  * 后端已按 createdAt 倒序返回，此处只校验形状并丢弃脏条目。
  */
 export async function fetchPosts(signal?: AbortSignal): Promise<Post[]> {
-  const response = await send({
+  const response = await send(ENDPOINT, {
     method: 'GET',
     headers: { Accept: 'application/json' },
     signal
@@ -107,7 +121,7 @@ export async function fetchPosts(signal?: AbortSignal): Promise<Post[]> {
 
 /** 发布一条内容，返回后端生成的完整记录 */
 export async function createPost(content: string): Promise<Post> {
-  const response = await send({
+  const response = await send(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ content })
@@ -120,4 +134,30 @@ export async function createPost(content: string): Promise<Post> {
   if (!post) throw new ApiError('INVALID_RESPONSE', INVALID_RESPONSE)
 
   return post
+}
+
+/** 调用子资源接口（点赞/收藏），返回后端落库后的完整记录 */
+async function toggleSubresource(path: string): Promise<Post> {
+  const response = await send(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json' }
+  })
+
+  if (!response.ok) throw await toApiError(response)
+
+  const body = await readJson(response)
+  const post = isRecord(body) ? toPost(body.post) : null
+  if (!post) throw new ApiError('INVALID_RESPONSE', INVALID_RESPONSE)
+
+  return post
+}
+
+/** 切换点赞状态（点过则取消） */
+export function toggleLike(id: string): Promise<Post> {
+  return toggleSubresource(`${ENDPOINT}/${encodeURIComponent(id)}/like`)
+}
+
+/** 切换收藏状态（收藏过则取消） */
+export function toggleBookmark(id: string): Promise<Post> {
+  return toggleSubresource(`${ENDPOINT}/${encodeURIComponent(id)}/bookmark`)
 }

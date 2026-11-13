@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Post } from '../types'
-import { ApiError, createPost, fetchPosts } from './api'
+import { ApiError, createPost, fetchPosts, toggleBookmark, toggleLike } from './api'
 import { EMPTY_ERROR } from './text'
 
 type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -29,10 +29,19 @@ const stubFetch = (impl: FetchFn) => {
   return mock
 }
 
-const post = (id: string, createdAt = 1, content = `第 ${id} 条`): Post => ({
+const post = (
+  id: string,
+  createdAt = 1,
+  content = `第 ${id} 条`,
+  extra: Partial<Post> = {}
+): Post => ({
   id,
   content,
-  createdAt
+  createdAt,
+  likes: 0,
+  liked: false,
+  bookmarked: false,
+  ...extra
 })
 
 afterEach(() => {
@@ -198,5 +207,112 @@ describe('createPost', () => {
     })
 
     await expect(createPost('内容')).rejects.toMatchObject({ code: 'NETWORK_ERROR' })
+  })
+})
+
+describe('互动字段归一化', () => {
+  it('缺少点赞/收藏字段时回退为默认值', async () => {
+    stubFetch(async () =>
+      jsonResponse({
+        posts: [{ id: 'old', content: '旧服务端返回', createdAt: 1 }]
+      })
+    )
+
+    await expect(fetchPosts()).resolves.toEqual([post('old', 1, '旧服务端返回')])
+  })
+
+  it('非法的点赞计数与状态位被纠正为默认值', async () => {
+    stubFetch(async () =>
+      jsonResponse({
+        posts: [
+          {
+            id: 'a',
+            content: '脏数据',
+            createdAt: 1,
+            likes: -3,
+            liked: 'yes',
+            bookmarked: 1
+          },
+          { id: 'b', content: '小数', createdAt: 2, likes: 1.5 }
+        ]
+      })
+    )
+
+    await expect(fetchPosts()).resolves.toEqual([
+      post('a', 1, '脏数据'),
+      post('b', 2, '小数')
+    ])
+  })
+})
+
+describe('toggleLike', () => {
+  it('POST 到点赞子资源并只接受 JSON', async () => {
+    const mock = stubFetch(async () => jsonResponse({ post: post('a', 1, '赞', { likes: 1, liked: true }) }))
+
+    await toggleLike('a')
+
+    expect(mock).toHaveBeenCalledTimes(1)
+    expect(mock).toHaveBeenCalledWith('/api/posts/a/like', {
+      method: 'POST',
+      headers: { Accept: 'application/json' }
+    })
+  })
+
+  it('返回后端更新后的记录', async () => {
+    stubFetch(async () =>
+      jsonResponse({ post: post('a', 1, '赞', { likes: 9, liked: true }) })
+    )
+
+    await expect(toggleLike('a')).resolves.toEqual(post('a', 1, '赞', { likes: 9, liked: true }))
+  })
+
+  it('id 中的特殊字符会被转义', async () => {
+    const mock = stubFetch(async () => jsonResponse({ post: post('a/b', 1) }))
+
+    await toggleLike('a/b')
+
+    expect(mock.mock.calls[0]?.[0]).toBe('/api/posts/a%2Fb/like')
+  })
+
+  it('非 2xx 时抛出带后端 message 的 ApiError', async () => {
+    stubFetch(async () =>
+      jsonResponse({ error: { code: 'NOT_FOUND', message: '内容不存在' } }, 404)
+    )
+
+    await expect(toggleLike('missing')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: '内容不存在'
+    })
+  })
+
+  it('响应缺少合法 post 时抛 INVALID_RESPONSE', async () => {
+    stubFetch(async () => jsonResponse({ post: { id: '' } }))
+
+    await expect(toggleLike('a')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+  })
+
+  it('网络异常时抛 NETWORK_ERROR', async () => {
+    stubFetch(async () => {
+      throw new TypeError('Failed to fetch')
+    })
+
+    await expect(toggleLike('a')).rejects.toMatchObject({ code: 'NETWORK_ERROR' })
+  })
+})
+
+describe('toggleBookmark', () => {
+  it('POST 到收藏子资源', async () => {
+    const mock = stubFetch(async () =>
+      jsonResponse({ post: post('a', 1, '收藏', { bookmarked: true }) })
+    )
+
+    await expect(toggleBookmark('a')).resolves.toMatchObject({ bookmarked: true })
+    expect(mock.mock.calls[0]?.[0]).toBe('/api/posts/a/bookmark')
+  })
+
+  it('失败时抛出 ApiError', async () => {
+    stubFetch(async () => jsonResponse({ error: { code: 'NOT_FOUND', message: '内容不存在' } }, 404))
+
+    await expect(toggleBookmark('missing')).rejects.toBeInstanceOf(ApiError)
   })
 })
