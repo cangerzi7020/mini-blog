@@ -6,4 +6,10 @@ export interface Post {
   content: string
   /** 发布时间戳（毫秒） */
   createdAt: number
+  /** 点赞数，非负整数 */
+  likes: number
+  /** 当前用户是否已点赞 */
+  liked: boolean
+  /** 当前用户是否已收藏 */
+  bookmarked: boolean
 }
