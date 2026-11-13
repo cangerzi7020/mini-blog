@@ -124,17 +124,36 @@ export const usePostsStore = defineStore('posts', () => {
       post.bookmarked = !post.bookmarked
     }
 
+    // 记录乐观值：回滚前要先确认本地没有被刷新结果改写过
+    const optimistic: Post = { ...post }
+
     try {
       const updated = await request(id)
       // 列表可能已被刷新替换，找不到就丢弃这次结果
       const current = posts.value.find((item) => item.id === id)
-      if (current) Object.assign(current, updated)
+      if (current) {
+        // 只吸收本次操作那一维：响应里的另一维是请求发出时的快照，
+        // 期间的另一次操作（如刚点完收藏）不该被它覆盖回旧值
+        if (kind === 'like') {
+          current.likes = updated.likes
+          current.liked = updated.liked
+        } else {
+          current.bookmarked = updated.bookmarked
+        }
+      }
     } catch (err) {
       const current = posts.value.find((item) => item.id === id)
       if (current) {
-        current.likes = snapshot.likes
-        current.liked = snapshot.liked
-        current.bookmarked = snapshot.bookmarked
+        // 回滚同样只回滚自己那一维，避免抹掉另一维已确认的结果；
+        // 且只在本地仍停留在本次乐观值时才回滚，不覆盖刷新回来的新数据
+        if (kind === 'like') {
+          if (current.likes === optimistic.likes && current.liked === optimistic.liked) {
+            current.likes = snapshot.likes
+            current.liked = snapshot.liked
+          }
+        } else if (current.bookmarked === optimistic.bookmarked) {
+          current.bookmarked = snapshot.bookmarked
+        }
       }
       actionError.value = messageOf(err, REACTION_ERROR)
     } finally {

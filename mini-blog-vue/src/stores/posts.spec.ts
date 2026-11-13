@@ -330,6 +330,58 @@ describe('点赞', () => {
 
     expect(mockedToggleLike).not.toHaveBeenCalled()
   })
+
+  it('晚到的点赞响应不会覆盖已确认的收藏状态', async () => {
+    const store = await storeWith([post('a', 1, '交叉操作')])
+    const pendingLike = deferred<Post>()
+    mockedToggleLike.mockReturnValue(pendingLike.promise)
+    mockedToggleBookmark.mockResolvedValue(post('a', 1, '交叉操作', { bookmarked: true }))
+
+    const likeDone = store.toggleLike('a')
+    await store.toggleBookmark('a')
+    expect(store.posts[0]?.bookmarked).toBe(true)
+
+    // 服务端处理点赞时读到的 bookmarked 仍是 false，属于过期快照
+    pendingLike.resolve(post('a', 1, '交叉操作', { likes: 1, liked: true, bookmarked: false }))
+    await likeDone
+
+    expect(store.posts[0]).toMatchObject({ likes: 1, liked: true, bookmarked: true })
+  })
+
+  it('点赞失败回滚不会抹掉已确认的收藏', async () => {
+    const store = await storeWith([post('a', 1, '失败回滚')])
+    mockedToggleLike.mockRejectedValue(new ApiError('NETWORK_ERROR', '网络异常'))
+    mockedToggleBookmark.mockResolvedValue(post('a', 1, '失败回滚', { bookmarked: true }))
+
+    await store.toggleBookmark('a')
+    await store.toggleLike('a')
+
+    expect(store.posts[0]).toMatchObject({ likes: 0, liked: false, bookmarked: true })
+    expect(store.actionError).toBe(REACTION_ERROR)
+  })
+
+  it('刷新带回新值后，失败回滚不覆盖它', async () => {
+    const store = await storeWith([post('a', 1, '刷新竞争')])
+    let rejectLike!: (err: unknown) => void
+    mockedToggleLike.mockReturnValue(
+      new Promise<Post>((_, reject) => {
+        rejectLike = reject
+      })
+    )
+
+    const done = store.toggleLike('a')
+    expect(store.posts[0]).toMatchObject({ likes: 1, liked: true })
+
+    // 在途期间列表被刷新，服务端已有点赞记录
+    mockedFetchPosts.mockResolvedValue([post('a', 1, '刷新竞争', { likes: 5, liked: true })])
+    await store.load()
+
+    rejectLike(new ApiError('NETWORK_ERROR', '网络异常'))
+    await done
+
+    expect(store.posts[0]).toMatchObject({ likes: 5, liked: true })
+    expect(store.actionError).toBe(REACTION_ERROR)
+  })
 })
 
 describe('收藏与筛选', () => {
