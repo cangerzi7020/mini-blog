@@ -38,7 +38,10 @@ beforeEach(() => {
   mockedCreatePost.mockImplementation(async (content) => ({
     id: 'new',
     content,
-    createdAt: 2
+    createdAt: 2,
+    likes: 0,
+    liked: false,
+    bookmarked: false
   }))
 })
 
@@ -118,7 +121,14 @@ describe('发布', () => {
     expect(button(wrapper).attributes('disabled')).toBeDefined()
     expect(mockedCreatePost).toHaveBeenCalledTimes(1)
 
-    pending.resolve({ id: 'new', content: '还没回来的内容', createdAt: 2 })
+    pending.resolve({
+      id: 'new',
+      content: '还没回来的内容',
+      createdAt: 2,
+      likes: 0,
+      liked: false,
+      bookmarked: false
+    })
     await flushPromises()
 
     expect((input(wrapper).element as HTMLTextAreaElement).value).toBe('')
