@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "橘生淮南 — 极简本地记录小站（Vue 3 + Pinia + localStorage）",
+  "description": "橘生淮南 — 极简记录小站（Vue 3 + Pinia + Hono 内存后端）",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -k -n api,web -c yellow,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:web": "vite",
+    "dev:server": "tsx watch server/index.ts",
+    "start:server": "tsx server/index.ts",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -13,6 +16,8 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.8",
+    "hono": "^4.13.18",
     "pinia": "^4.1.0",
     "vue": "^3.5.45"
   },
@@ -20,7 +25,9 @@
     "@types/node": "^26.6.6",
     "@vitejs/plugin-vue": "^6.0.11",
     "@vue/test-utils": "^2.5.1",
+    "concurrently": "^10.0.7",
     "jsdom": "^31.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vite": "^8.3.8",
     "vitest": "^5.1.0",

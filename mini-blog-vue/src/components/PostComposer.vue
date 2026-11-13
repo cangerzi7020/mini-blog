@@ -1,31 +1,42 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { MAX_LENGTH } from '../lib/constants'
-import { countChars, isBlank } from '../lib/text'
+import { countChars } from '../lib/text'
 import { usePostsStore } from '../stores/posts'
 
 const store = usePostsStore()
 
 const text = ref('')
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
+// 请求进行中：避免重复提交，也避免内容被清空前再次发布
+const busy = ref(false)
 
-const length = computed(() => countChars(text.value))
+// 与 store/后端一致：首尾空白不参与计数，避免「按钮禁用但内容其实合法」
+const trimmed = computed(() => text.value.trim())
+const length = computed(() => countChars(trimmed.value))
 const isOver = computed(() => length.value > MAX_LENGTH)
 const isWarn = computed(() => !isOver.value && length.value > MAX_LENGTH - 20)
 
 // 空内容或超限时禁用按钮，避免无效提交
-const canPublish = computed(() => !isBlank(text.value) && !isOver.value)
+const canPublish = computed(() => trimmed.value.length > 0 && !isOver.value)
 
 /** 输入即清掉上一次的错误，避免旧提示滞留在界面上 */
 function onInput(): void {
   store.clearError()
 }
 
-/** 校验交给 store 统一处理：成功才清空输入，失败保留内容不丢失 */
-function submit(): void {
-  if (store.publish(text.value)) {
-    text.value = ''
-    textareaEl.value?.focus()
+/** 校验与提交都交给 store：成功才清空输入，失败保留内容不丢失 */
+async function submit(): Promise<void> {
+  if (busy.value) return
+
+  busy.value = true
+  try {
+    if (await store.publish(text.value)) {
+      text.value = ''
+      textareaEl.value?.focus()
+    }
+  } finally {
+    busy.value = false
   }
 }
 
@@ -33,7 +44,7 @@ function submit(): void {
 function onKeydown(event: KeyboardEvent): void {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
     event.preventDefault()
-    submit()
+    void submit()
   }
 }
 </script>
@@ -69,10 +80,10 @@ function onKeydown(event: KeyboardEvent): void {
         id="publish-btn"
         class="btn-primary"
         type="button"
-        :disabled="!canPublish"
+        :disabled="!canPublish || busy"
         @click="submit"
       >
-        发布
+        {{ busy ? '发布中…' : '发布' }}
       </button>
     </div>
   </section>

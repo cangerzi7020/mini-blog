@@ -1,141 +1,220 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SAVE_ERROR, STORAGE_KEY } from '../lib/constants'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError, createPost, fetchPosts } from '../lib/api'
+import { LOAD_ERROR, SAVE_ERROR } from '../lib/constants'
 import { EMPTY_ERROR } from '../lib/text'
 import type { Post } from '../types'
 import { usePostsStore } from './posts'
 
-const seed = (posts: Post[]) => localStorage.setItem(STORAGE_KEY, JSON.stringify(posts))
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>()
+  return { ...actual, fetchPosts: vi.fn(), createPost: vi.fn() }
+})
 
-const storedPosts = (): Post[] => JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]') as Post[]
+const mockedFetchPosts = vi.mocked(fetchPosts)
+const mockedCreatePost = vi.mocked(createPost)
+
+const post = (id: string, createdAt = 1, content = `第 ${id} 条`): Post => ({
+  id,
+  content,
+  createdAt
+})
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
 
 beforeEach(() => {
   setActivePinia(createPinia())
-})
-
-afterEach(() => {
-  vi.restoreAllMocks()
+  mockedFetchPosts.mockReset()
+  mockedCreatePost.mockReset()
 })
 
 describe('初始状态与加载', () => {
-  it('默认没有内容也不报错', () => {
+  it('默认没有内容、不加载也不报错', () => {
     const store = usePostsStore()
 
     expect(store.posts).toEqual([])
     expect(store.isEmpty).toBe(true)
     expect(store.error).toBe('')
+    expect(store.loadError).toBe('')
+    expect(store.loading).toBe(false)
   })
 
-  it('load 读入已存在的内容', () => {
-    seed([{ id: 'a', content: '第一条想法', createdAt: 1 }])
+  it('load 成功后填充列表并清空加载错误', async () => {
+    mockedFetchPosts.mockResolvedValue([post('new', 2), post('old', 1)])
     const store = usePostsStore()
 
-    store.load()
+    await store.load()
 
-    expect(store.posts).toEqual([{ id: 'a', content: '第一条想法', createdAt: 1 }])
+    expect(store.posts.map((item) => item.id)).toEqual(['new', 'old'])
+    expect(store.isEmpty).toBe(false)
+    expect(store.loadError).toBe('')
+    expect(store.loading).toBe(false)
+  })
+
+  it('load 期间 loading 为 true，完成后复位', async () => {
+    const pending = deferred<Post[]>()
+    mockedFetchPosts.mockReturnValue(pending.promise)
+    const store = usePostsStore()
+
+    const done = store.load()
+    expect(store.loading).toBe(true)
+
+    pending.resolve([post('a', 1)])
+    await done
+
+    expect(store.loading).toBe(false)
+    expect(store.posts.map((item) => item.id)).toEqual(['a'])
+  })
+
+  it('load 失败时设置 loadError 并保留已有列表', async () => {
+    mockedFetchPosts.mockResolvedValueOnce([post('a', 1)])
+    mockedFetchPosts.mockRejectedValueOnce(new ApiError('NETWORK_ERROR', '网络异常'))
+    const store = usePostsStore()
+
+    await store.load()
+    await store.load()
+
+    expect(store.posts.map((item) => item.id)).toEqual(['a'])
+    expect(store.loadError).toBe(LOAD_ERROR)
+    expect(store.loading).toBe(false)
+  })
+
+  it('load 再次成功后清空上一次的加载错误', async () => {
+    mockedFetchPosts.mockRejectedValueOnce(new ApiError('NETWORK_ERROR', '网络异常'))
+    mockedFetchPosts.mockResolvedValueOnce([post('b', 2)])
+    const store = usePostsStore()
+
+    await store.load()
+    expect(store.loadError).toBe(LOAD_ERROR)
+
+    await store.load()
+    expect(store.loadError).toBe('')
+  })
+
+  it('发布期间返回的旧列表快照不会覆盖新内容', async () => {
+    const pending = deferred<Post[]>()
+    mockedFetchPosts.mockReturnValue(pending.promise)
+    mockedCreatePost.mockResolvedValue(post('new', 9, '刚发的'))
+    const store = usePostsStore()
+
+    const loading = store.load()
+    await store.publish('刚发的')
+
+    pending.resolve([post('old', 1, '旧内容')])
+    await loading
+
+    expect(store.posts.map((item) => item.content)).toEqual(['刚发的'])
+    expect(store.loading).toBe(false)
+  })
+
+  it('发布成功会清掉上一次的加载错误', async () => {
+    mockedFetchPosts.mockRejectedValueOnce(new ApiError('NETWORK_ERROR', '网络异常'))
+    mockedCreatePost.mockResolvedValue(post('new', 9, '新内容'))
+    const store = usePostsStore()
+
+    await store.load()
+    expect(store.loadError).toBe(LOAD_ERROR)
+
+    await store.publish('新内容')
+    expect(store.loadError).toBe('')
+  })
+
+  it('空列表判定随加载结果变化', async () => {
+    mockedFetchPosts.mockResolvedValue([])
+    const store = usePostsStore()
+
+    await store.load()
+    expect(store.isEmpty).toBe(true)
+
+    mockedFetchPosts.mockResolvedValueOnce([post('a', 1)])
+    await store.load()
     expect(store.isEmpty).toBe(false)
   })
 })
 
 describe('publish', () => {
-  it('发布成功后写入存储并置顶', () => {
-    seed([{ id: 'old', content: '旧内容', createdAt: 1 }])
-    const store = usePostsStore()
-    store.load()
-
-    expect(store.publish('新内容')).toBe(true)
-
-    expect(store.posts.map((post) => post.content)).toEqual(['新内容', '旧内容'])
-    expect(storedPosts().map((post) => post.content)).toEqual(['新内容', '旧内容'])
-    expect(store.error).toBe('')
-  })
-
-  it('保存的是去除首尾空白后的内容', () => {
+  it('空白内容被拒绝且不请求接口', async () => {
     const store = usePostsStore()
 
-    store.publish('  留白也是内容  ')
-
-    expect(store.posts[0]?.content).toBe('留白也是内容')
-  })
-
-  it('为新内容生成唯一 id 与毫秒时间戳', () => {
-    const store = usePostsStore()
-
-    store.publish('第一条')
-    store.publish('第二条')
-
-    const ids = store.posts.map((post) => post.id)
-    expect(new Set(ids).size).toBe(2)
-    expect(store.posts.every((post) => post.createdAt > 0)).toBe(true)
-  })
-
-  it('空白内容被拒绝，不写入存储', () => {
-    const store = usePostsStore()
-
-    expect(store.publish('   ')).toBe(false)
+    await expect(store.publish('   ')).resolves.toBe(false)
 
     expect(store.error).toBe(EMPTY_ERROR)
     expect(store.posts).toEqual([])
-    expect(storedPosts()).toEqual([])
+    expect(mockedCreatePost).not.toHaveBeenCalled()
   })
 
-  it('超出长度上限被拒绝，不写入存储', () => {
+  it('超出长度上限被拒绝且不请求接口', async () => {
     const store = usePostsStore()
 
-    expect(store.publish('字'.repeat(141))).toBe(false)
+    await expect(store.publish('字'.repeat(141))).resolves.toBe(false)
 
     expect(store.error).toBe('内容超出 140 字上限')
-    expect(storedPosts()).toEqual([])
+    expect(mockedCreatePost).not.toHaveBeenCalled()
   })
 
-  it('存储写入失败时提示保存失败且不改动内存状态', () => {
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('QuotaExceededError')
-    })
+  it('发布成功把返回的记录置顶', async () => {
+    mockedFetchPosts.mockResolvedValue([post('old', 1, '旧内容')])
+    mockedCreatePost.mockResolvedValue(post('new', 9, '新内容'))
     const store = usePostsStore()
+    await store.load()
 
-    expect(store.publish('写不进去的内容')).toBe(false)
+    await expect(store.publish('新内容')).resolves.toBe(true)
 
-    expect(store.error).toBe(SAVE_ERROR)
-    expect(store.posts).toEqual([])
-  })
-
-  it('重新发布成功后清除上一次的错误', () => {
-    const store = usePostsStore()
-    store.publish('   ')
-
-    store.publish('这次可以')
-
+    expect(store.posts.map((item) => item.content)).toEqual(['新内容', '旧内容'])
     expect(store.error).toBe('')
   })
-})
 
-describe('排序与同步', () => {
-  it('载入后即按发布时间倒序，不依赖存储顺序', () => {
-    seed([
-      { id: 'mid', content: '中间', createdAt: 2 },
-      { id: 'old', content: '最早', createdAt: 1 },
-      { id: 'new', content: '最新', createdAt: 3 }
-    ])
+  it('提交给接口的是去除首尾空白后的内容', async () => {
+    mockedCreatePost.mockResolvedValue(post('new', 9, '留白也是内容'))
     const store = usePostsStore()
-    store.load()
 
-    expect(store.posts.map((post) => post.id)).toEqual(['new', 'mid', 'old'])
+    await store.publish('  留白也是内容  ')
+
+    expect(mockedCreatePost).toHaveBeenCalledWith('留白也是内容')
   })
 
-  it('syncFromStorage 反映其他标签页的写入', () => {
+  it('发布失败保留列表并返回 false', async () => {
+    mockedFetchPosts.mockResolvedValue([post('old', 1, '旧内容')])
+    mockedCreatePost.mockRejectedValue(new ApiError('NETWORK_ERROR', '网络异常'))
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    seed([{ id: 'other', content: '别的标签页写的', createdAt: 9 }])
-    store.syncFromStorage()
+    await expect(store.publish('写不进去的内容')).resolves.toBe(false)
 
-    expect(store.posts.map((post) => post.content)).toEqual(['别的标签页写的'])
+    expect(store.error).toBe(SAVE_ERROR)
+    expect(store.posts.map((item) => item.content)).toEqual(['旧内容'])
   })
 
-  it('clearError 重置错误文案', () => {
+  it('后端返回的校验文案直接展示', async () => {
+    mockedCreatePost.mockRejectedValue(new ApiError('EMPTY_CONTENT', EMPTY_ERROR))
     const store = usePostsStore()
-    store.publish('   ')
+
+    await expect(store.publish('内容')).resolves.toBe(false)
+
+    expect(store.error).toBe(EMPTY_ERROR)
+  })
+
+  it('重新发布成功后清除上一次的错误', async () => {
+    mockedCreatePost.mockRejectedValueOnce(new ApiError('NETWORK_ERROR', '网络异常'))
+    mockedCreatePost.mockResolvedValueOnce(post('new', 9, '这次可以'))
+    const store = usePostsStore()
+
+    await store.publish('先失败一次')
+    expect(store.error).toBe(SAVE_ERROR)
+
+    await store.publish('这次可以')
+    expect(store.error).toBe('')
+  })
+
+  it('clearError 重置发布错误', async () => {
+    const store = usePostsStore()
+    await store.publish('   ')
 
     store.clearError()
 

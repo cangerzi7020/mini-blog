@@ -1,4 +1,4 @@
-/** 一条本地记录 */
+/** 服务端返回的一条记录 */
 export interface Post {
   /** 唯一标识，格式见 lib/uid.ts */
   id: string

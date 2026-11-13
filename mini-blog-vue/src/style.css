@@ -307,6 +307,41 @@ body {
 }
 
 /* ============ 空状态 ============ */
+.feed-loading,
+.feed-error {
+  margin: 0 0 12px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  box-shadow: var(--shadow);
+  color: var(--text-sub);
+  font-size: 14px;
+}
+
+.feed-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--danger);
+}
+
+.feed-retry {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.feed-retry:hover {
+  background: rgba(217, 45, 32, 0.08);
+}
+
 .empty-state {
   text-align: center;
   padding: 56px 20px;

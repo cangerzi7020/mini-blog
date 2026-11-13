@@ -1,24 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
 import PostComposer from './components/PostComposer.vue'
 import PostFeed from './components/PostFeed.vue'
-import { STORAGE_KEY } from './lib/constants'
 import { usePostsStore } from './stores/posts'
 
-const store = usePostsStore()
-
-// setup 阶段同步载入，首帧即为真实数据，避免空状态闪一下
-store.load()
-
-/** 其他标签页改动同一份数据时同步列表；storage 事件不在写入页触发，无循环刷新风险 */
-function onStorage(event: StorageEvent): void {
-  if (event.key === STORAGE_KEY || event.key === null) {
-    store.syncFromStorage()
-  }
-}
-
-onMounted(() => window.addEventListener('storage', onStorage))
-onUnmounted(() => window.removeEventListener('storage', onStorage))
+// setup 阶段即发起拉取，首帧显示加载中，数据回来后自动渲染
+void usePostsStore().load()
 </script>
 
 <template>
@@ -90,6 +76,6 @@ onUnmounted(() => window.removeEventListener('storage', onStorage))
   </main>
 
   <footer class="footer">
-    <p>橘生淮南 · 一个极简的本地记录小站</p>
+    <p>橘生淮南 · 一个极简的记录小站</p>
   </footer>
 </template>

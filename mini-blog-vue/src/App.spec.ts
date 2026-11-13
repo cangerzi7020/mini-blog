@@ -1,73 +1,117 @@
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { nextTick } from 'vue'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
-import { STORAGE_KEY } from './lib/constants'
+import { ApiError, createPost, fetchPosts } from './lib/api'
+import { LOAD_ERROR, SAVE_ERROR } from './lib/constants'
+import type { Post } from './types'
+
+vi.mock('./lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/api')>()
+  return { ...actual, fetchPosts: vi.fn(), createPost: vi.fn() }
+})
+
+const mockedFetchPosts = vi.mocked(fetchPosts)
+const mockedCreatePost = vi.mocked(createPost)
 
 let pinia: Pinia
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => {
+    resolve = r
+  })
+  return { promise, resolve }
+}
+
+const post = (id: string, createdAt = 1, content = `第 ${id} 条`): Post => ({
+  id,
+  content,
+  createdAt
+})
 
 beforeEach(() => {
   pinia = createPinia()
   setActivePinia(pinia)
+  mockedFetchPosts.mockReset()
+  mockedCreatePost.mockReset()
+  mockedFetchPosts.mockResolvedValue([])
+  mockedCreatePost.mockResolvedValue(post('new', 2, '发布的新内容'))
 })
 
 const mountApp = (): VueWrapper => mount(App, { global: { plugins: [pinia] } })
 
-const dispatchStorage = async (key: string | null): Promise<void> => {
-  window.dispatchEvent(new StorageEvent('storage', { key }))
-  await nextTick()
-}
+const contents = (wrapper: VueWrapper): string[] =>
+  wrapper.findAll('.post-content').map((node) => node.text())
 
 describe('App', () => {
   it('渲染品牌与页脚', () => {
     const wrapper = mountApp()
 
     expect(wrapper.get('.brand-name').text()).toBe('橘生淮南')
-    expect(wrapper.get('.footer').text()).toContain('极简的本地记录小站')
-
-    wrapper.unmount()
+    expect(wrapper.get('.footer').text()).toContain('极简的记录小站')
   })
 
-  it('挂载时读取 localStorage 中已有的内容', () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify([{ id: 'a', content: '上次写的内容', createdAt: 1 }])
-    )
-
+  it('首屏加载接口返回的内容', async () => {
+    mockedFetchPosts.mockResolvedValue([post('a', 1, '上次写的内容')])
     const wrapper = mountApp()
 
-    expect(wrapper.get('.post-content').text()).toBe('上次写的内容')
+    await flushPromises()
 
-    wrapper.unmount()
+    expect(contents(wrapper)).toEqual(['上次写的内容'])
+    expect(wrapper.find('.empty-state').exists()).toBe(false)
   })
 
-  it('其他标签页写入后通过 storage 事件同步列表', async () => {
+  it('加载期间显示加载提示，返回后消失', async () => {
+    const pending = deferred<Post[]>()
+    mockedFetchPosts.mockReturnValue(pending.promise)
     const wrapper = mountApp()
+
+    expect(wrapper.get('.feed-loading').text()).toBe('加载中…')
+
+    pending.resolve([post('a', 1, '回来了')])
+    await flushPromises()
+
+    expect(wrapper.find('.feed-loading').exists()).toBe(false)
+    expect(contents(wrapper)).toEqual(['回来了'])
+  })
+
+  it('加载失败时提示无法连接服务器', async () => {
+    mockedFetchPosts.mockRejectedValue(new ApiError('NETWORK_ERROR', '网络异常'))
+    const wrapper = mountApp()
+
+    await flushPromises()
+
+    expect(wrapper.get('.feed-error').text()).toContain(LOAD_ERROR)
     expect(wrapper.find('.post').exists()).toBe(false)
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify([{ id: 'b', content: '别的标签页写的', createdAt: 2 }])
-    )
-    await dispatchStorage(STORAGE_KEY)
-
-    expect(wrapper.get('.post-content').text()).toBe('别的标签页写的')
-
-    wrapper.unmount()
   })
 
-  it('无关的 storage 事件不会刷新列表', async () => {
+  it('发布成功后新内容置顶显示', async () => {
+    mockedFetchPosts.mockResolvedValue([post('old', 1, '旧内容')])
+    mockedCreatePost.mockResolvedValue(post('new', 2, '刚发布的内容'))
     const wrapper = mountApp()
+    await flushPromises()
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify([{ id: 'c', content: '不相关的 key', createdAt: 3 }])
-    )
-    await dispatchStorage('unrelated-key')
+    await wrapper.get('#compose-input').setValue('刚发布的内容')
+    await wrapper.get('#publish-btn').trigger('click')
+    await flushPromises()
 
-    expect(wrapper.find('.post').exists()).toBe(false)
+    expect(mockedCreatePost).toHaveBeenCalledWith('刚发布的内容')
+    expect(contents(wrapper)).toEqual(['刚发布的内容', '旧内容'])
+    expect((wrapper.get('#compose-input').element as HTMLTextAreaElement).value).toBe('')
+  })
 
-    wrapper.unmount()
+  it('发布失败时提示错误并保留输入', async () => {
+    mockedCreatePost.mockRejectedValue(new ApiError('NETWORK_ERROR', '网络异常'))
+    const wrapper = mountApp()
+    await flushPromises()
+
+    await wrapper.get('#compose-input').setValue('没网也想发')
+    await wrapper.get('#publish-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('#compose-error').text()).toBe(SAVE_ERROR)
+    expect((wrapper.get('#compose-input').element as HTMLTextAreaElement).value).toBe('没网也想发')
+    expect(contents(wrapper)).toEqual([])
   })
 })
