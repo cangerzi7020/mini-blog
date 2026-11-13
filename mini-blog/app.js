@@ -1,10 +1,11 @@
 /**
- * MiniBlog — 极简本地记录小站
+ * 橘生淮南 — 极简本地记录小站
  * 纯原生 JS：发布 + 查看，localStorage 持久化
  */
 (function () {
   "use strict";
 
+  // key 属于历史标识，改名会让已有本地内容全部丢失，故保持不变
   var STORAGE_KEY = "mini-blog-posts";
   var MAX_LENGTH = 140;
 

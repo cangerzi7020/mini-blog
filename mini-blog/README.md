@@ -1,6 +1,6 @@
-# MiniBlog
+# 橘生淮南
 
-极简的本地记录小站：纯 HTML + CSS + JavaScript，零依赖、零构建，数据只保存在当前浏览器。
+极简的本地记录小站：纯 HTML + CSS + JavaScript，零依赖、零构建，数据只保存在当前浏览器。品牌标识为手绘风格的橙子图形（内联 SVG，同时用作 favicon）。
 
 ## 功能
 
@@ -24,7 +24,7 @@ python -m http.server 5173
 
 ## 数据结构
 
-`localStorage` key：`mini-blog-posts`，值为数组：
+`localStorage` key：`mini-blog-posts`（沿用项目早期命名，与品牌名无关，改动会导致已有内容丢失），值为数组：
 
 ```json
 [
