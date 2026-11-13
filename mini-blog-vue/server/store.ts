@@ -9,6 +9,10 @@ export interface PostStore {
   get(id: string): Post | undefined
   /** 追加一条内容，返回创建后的记录 */
   add(content: string): Post
+  /** 切换点赞状态并返回更新后的副本，id 不存在时返回 undefined */
+  toggleLike(id: string): Post | undefined
+  /** 切换收藏状态并返回更新后的副本，id 不存在时返回 undefined */
+  toggleBookmark(id: string): Post | undefined
   /** 清空（供测试重置） */
   clear(): void
 }
@@ -28,6 +32,9 @@ export function createPostStore(
   /** 内部按「最新在前」存放，减少相同时间戳时的排序歧义 */
   const posts: Post[] = []
 
+  /** 找出内部记录；不存在时返回 undefined */
+  const find = (id: string): Post | undefined => posts.find((post) => post.id === id)
+
   return {
     list() {
       // 返回副本：调用方改动不会污染内部状态。
@@ -37,14 +44,41 @@ export function createPostStore(
 
     get(id) {
       // 同样返回副本，语义与 list 一致
-      const found = posts.find((post) => post.id === id)
+      const found = find(id)
       return found ? { ...found } : undefined
     },
 
     add(content) {
-      const post: Post = { id: genId(), content: content.trim(), createdAt: now() }
+      const post: Post = {
+        id: genId(),
+        content: content.trim(),
+        createdAt: now(),
+        likes: 0,
+        liked: false,
+        bookmarked: false
+      }
       posts.unshift(post)
       return { ...post }
+    },
+
+    toggleLike(id) {
+      const found = find(id)
+      if (!found) return undefined
+
+      found.liked = !found.liked
+      // 取消点赞时不允许出现负数：历史脏数据也能自愈
+      found.likes = Math.max(0, found.likes + (found.liked ? 1 : -1))
+
+      return { ...found }
+    },
+
+    toggleBookmark(id) {
+      const found = find(id)
+      if (!found) return undefined
+
+      found.bookmarked = !found.bookmarked
+
+      return { ...found }
     },
 
     clear() {
