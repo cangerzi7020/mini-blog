@@ -1,5 +1,11 @@
 import type { Post } from '../types'
 
+/**
+ * 写接口（createPost / toggleLike / toggleBookmark）不可自动重试：
+ * 同步去重守卫在调用方（stores/posts.ts 与 PostComposer），本层不加 retry 或退避；
+ * like / bookmark 是翻转语义，重试会二次翻转。新增写接口时须自行补守卫。
+ */
+
 /** 接口地址：开发期由 vite 代理转发到 127.0.0.1:8788 */
 const ENDPOINT = '/api/posts'
 
