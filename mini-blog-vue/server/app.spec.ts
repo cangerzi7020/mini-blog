@@ -74,7 +74,14 @@ describe('POST /api/posts 成功', () => {
     expect(res.headers.get('content-type')).toContain('application/json')
 
     const { post } = await readJson<PostBody>(res)
-    expect(post).toEqual({ id: 'id-1', content: '橘生淮南', createdAt: 2_000 })
+    expect(post).toEqual({
+      id: 'id-1',
+      content: '橘生淮南',
+      createdAt: 2_000,
+      likes: 0,
+      liked: false,
+      bookmarked: false
+    })
     expect(store.list()).toEqual([post])
     expect((await readJson<PostsBody>(await app.request('/api/posts'))).posts).toEqual([post])
   })
@@ -213,6 +220,130 @@ describe('GET /api/posts/:id', () => {
   })
 })
 
+/** 先发一条内容，返回可直接操作其子资源的 app 与 id */
+async function appWithPost(): Promise<{ app: ReturnType<typeof createApp>; id: string }> {
+  const app = client()
+  const { post } = await readJson<PostBody>(
+    await app.request('/api/posts', jsonPost({ content: '可互动的内容' }))
+  )
+  return { app, id: post.id }
+}
+
+describe('POST /api/posts/:id/like', () => {
+  it('切换点赞并返回更新后的内容', async () => {
+    const { app, id } = await appWithPost()
+
+    const res = await app.request(`/api/posts/${id}/like`, { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await readJson<PostBody>(res)).toEqual({
+      post: {
+        id,
+        content: '可互动的内容',
+        createdAt: 2_000,
+        likes: 1,
+        liked: true,
+        bookmarked: false
+      }
+    })
+  })
+
+  it('重复调用即取消点赞', async () => {
+    const { app, id } = await appWithPost()
+
+    await app.request(`/api/posts/${id}/like`, { method: 'POST' })
+    const { post } = await readJson<PostBody>(
+      await app.request(`/api/posts/${id}/like`, { method: 'POST' })
+    )
+
+    expect(post).toMatchObject({ likes: 0, liked: false })
+  })
+
+  it('点赞状态会出现在列表与详情接口中', async () => {
+    const { app, id } = await appWithPost()
+    await app.request(`/api/posts/${id}/like`, { method: 'POST' })
+
+    const listed = await readJson<PostsBody>(await app.request('/api/posts'))
+    const detail = await readJson<PostBody>(await app.request(`/api/posts/${id}`))
+
+    expect(listed.posts[0]).toMatchObject({ likes: 1, liked: true })
+    expect(detail.post).toMatchObject({ likes: 1, liked: true })
+  })
+
+  it('id 不存在时返回 404 NOT_FOUND', async () => {
+    const res = await client().request('/api/posts/missing/like', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    expect(await readJson<ErrorBody>(res)).toEqual({
+      error: { code: 'NOT_FOUND', message: '内容不存在' }
+    })
+  })
+
+  it('只改动目标内容', async () => {
+    const app = client()
+    await app.request('/api/posts', jsonPost({ content: '第一条' }))
+    await app.request('/api/posts', jsonPost({ content: '第二条' }))
+
+    await app.request('/api/posts/id-1/like', { method: 'POST' })
+
+    const { posts } = await readJson<PostsBody>(await app.request('/api/posts'))
+    expect(posts.find((post) => post.id === 'id-1')).toMatchObject({ liked: true, likes: 1 })
+    expect(posts.find((post) => post.id === 'id-2')).toMatchObject({ liked: false, likes: 0 })
+  })
+})
+
+describe('POST /api/posts/:id/bookmark', () => {
+  it('切换收藏并返回更新后的内容', async () => {
+    const { app, id } = await appWithPost()
+
+    const res = await app.request(`/api/posts/${id}/bookmark`, { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await readJson<PostBody>(res)).toEqual({
+      post: {
+        id,
+        content: '可互动的内容',
+        createdAt: 2_000,
+        likes: 0,
+        liked: false,
+        bookmarked: true
+      }
+    })
+  })
+
+  it('重复调用即取消收藏', async () => {
+    const { app, id } = await appWithPost()
+
+    await app.request(`/api/posts/${id}/bookmark`, { method: 'POST' })
+    const { post } = await readJson<PostBody>(
+      await app.request(`/api/posts/${id}/bookmark`, { method: 'POST' })
+    )
+
+    expect(post.bookmarked).toBe(false)
+  })
+
+  it('收藏与点赞互不影响', async () => {
+    const { app, id } = await appWithPost()
+
+    await app.request(`/api/posts/${id}/bookmark`, { method: 'POST' })
+    const { post } = await readJson<PostBody>(
+      await app.request(`/api/posts/${id}/like`, { method: 'POST' })
+    )
+
+    expect(post).toMatchObject({ liked: true, likes: 1, bookmarked: true })
+  })
+
+  it('id 不存在时返回 404 NOT_FOUND', async () => {
+    const res = await client().request('/api/posts/missing/bookmark', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    expect(await readJson<ErrorBody>(res)).toEqual({
+      error: { code: 'NOT_FOUND', message: '内容不存在' }
+    })
+  })
+})
+
 describe('未知路由', () => {
   it('返回 404 NOT_FOUND', async () => {
     const res = await client().request('/api/nope')
@@ -229,7 +360,16 @@ describe('store 注入', () => {
     const store = createPostStore({ now: () => 5, genId: () => 'seed' })
     store.add('预置内容')
     const { posts } = await readJson<PostsBody>(await createApp({ store }).request('/api/posts'))
-    expect(posts).toEqual([{ id: 'seed', content: '预置内容', createdAt: 5 }])
+    expect(posts).toEqual([
+      {
+        id: 'seed',
+        content: '预置内容',
+        createdAt: 5,
+        likes: 0,
+        liked: false,
+        bookmarked: false
+      }
+    ])
   })
 
   it('不同 app 实例之间互不影响', async () => {

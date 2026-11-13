@@ -39,6 +39,22 @@ export function createApp(deps: { store?: PostStore } = {}): Hono {
     return c.json({ post })
   })
 
+  // 点赞：切换语义，重复调用即取消；无请求体，故不加 bodyLimit
+  app.post('/api/posts/:id/like', (c) => {
+    const post = store.toggleLike(c.req.param('id'))
+    if (!post) return c.json(fail('NOT_FOUND', POST_NOT_FOUND_MESSAGE), 404)
+
+    return c.json({ post })
+  })
+
+  // 收藏：与点赞同构的子资源，状态保存在内容记录上
+  app.post('/api/posts/:id/bookmark', (c) => {
+    const post = store.toggleBookmark(c.req.param('id'))
+    if (!post) return c.json(fail('NOT_FOUND', POST_NOT_FOUND_MESSAGE), 404)
+
+    return c.json({ post })
+  })
+
   // 140 字正文远小于此上限；先挡大包，避免整包解析后才判超长
   const limitBody = bodyLimit({
     maxSize: 8 * 1024,
