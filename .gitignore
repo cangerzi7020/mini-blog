@@ -11,3 +11,10 @@ desktop.ini
 # 本地工具与 IDE 数据，不入版本管理
 .codebuddy/
 .playwright-cli/
+
+# Node 工程（mini-blog-vue）
+node_modules/
+dist/
+coverage/
+*.local
+*.log

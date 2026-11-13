@@ -2,6 +2,8 @@
 
 极简的本地记录小站：纯 HTML + CSS + JavaScript，零依赖、零构建，数据只保存在当前浏览器。品牌标识为手绘风格的橙子图形（内联 SVG，同时用作 favicon）。
 
+> Vue 3 + Pinia 的 TDD 重写版见 [`../mini-blog-vue`](../mini-blog-vue/README.md)，两者共用同一个 `localStorage` key，数据互通。
+
 ## 功能
 
 - **发布**：多行输入，最多 140 字（按码点计数，emoji 算 1 个），实时字数提示，空内容或超限时发布按钮禁用，`Ctrl/Cmd + Enter` 快捷发布。
