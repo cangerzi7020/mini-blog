@@ -45,7 +45,7 @@ npm run preview      # 预览构建产物，需另开 dev:server 才有接口
 server/
 ├── index.ts                    # 启动入口：@hono/node-server，端口 8788（PORT 可覆盖）
 ├── app.ts                      # createApp({ store })：cors、8KB bodyLimit、路由、notFound
-├── store.ts                    # createPostStore：进程内内存数组，list/get/add/clear
+├── store.ts                    # createPostStore：进程内内存数组，list/get/add/toggleLike/toggleBookmark/clear
 ├── store.spec.ts               # 内存仓库单测
 ├── app.spec.ts                 # 路由、状态码与错误契约
 └── contract.spec.ts            # 用真实 app 替换 fetch，验证前后端契约
@@ -53,16 +53,16 @@ server/
 src/
 ├── types.ts                    # Post 领域模型
 ├── lib/                        # 纯函数，不依赖 Vue，可直接单测
-│   ├── api.ts                  # fetchPosts / createPost / ApiError
-│   ├── constants.ts            # 140 上限、加载与保存的失败文案
+│   ├── api.ts                  # fetchPosts / createPost / toggleLike / toggleBookmark / ApiError
+│   ├── constants.ts            # 140 上限、加载/保存/互动失败文案
 │   ├── text.ts                 # 码点计数、空白判定、发布校验（前后端共用）
 │   ├── time.ts                 # 相对时间文案
 │   └── uid.ts                  # 时间戳-随机后缀 id
-├── stores/posts.ts             # Pinia：列表、加载、发布、错误状态
+├── stores/posts.ts             # Pinia：列表、加载、发布、点赞/收藏、筛选与错误状态
 ├── components/
 │   ├── PostComposer.vue        # 发布框：计数、禁用、快捷键、错误提示
-│   ├── PostItem.vue            # 单条内容
-│   └── PostFeed.vue            # 列表 + 加载/失败/空状态
+│   ├── PostItem.vue            # 单条内容 + 点赞/收藏按钮
+│   └── PostFeed.vue            # 筛选标签 + 列表 + 加载/失败/空状态
 ├── App.vue                     # 页面骨架，setup 阶段触发首次 load()
 ├── style.css                   # 从原生版迁移的主题与布局
 └── main.ts                     # 挂载入口
@@ -84,6 +84,8 @@ src/
 | GET | `/api/posts` | 无 | `200` `{ "posts": Post[] }`，按 `createdAt` 倒序 | — |
 | GET | `/api/posts/:id` | 路径参数 `id` | `200` `{ "post": Post }` | `NOT_FOUND`（`404`） |
 | POST | `/api/posts` | `{ "content": string }`（JSON） | `201` `{ "post": Post }`，附 `Location: /api/posts/{id}` | `INVALID_BODY` / `EMPTY_CONTENT` / `CONTENT_TOO_LONG` / `PAYLOAD_TOO_LARGE` |
+| POST | `/api/posts/:id/like` | 无 | `200` `{ "post": Post }`，切换点赞 | `NOT_FOUND`（`404`） |
+| POST | `/api/posts/:id/bookmark` | 无 | `200` `{ "post": Post }`，切换收藏 | `NOT_FOUND`（`404`） |
 | 任意 | 未匹配路由 | — | — | `NOT_FOUND`（`404`） |
 
 POST 的处理顺序（决定了错误码的优先级）：
@@ -95,6 +97,8 @@ POST 的处理顺序（决定了错误码的优先级）：
 5. 通过后由 store 追加：`content` 先 `trim()`，`id` 由 `src/lib/uid.ts` 生成，`createdAt` 取当前毫秒。
 
 `GET /api/posts` 返回副本并已排序，调用方修改数组不会影响服务端状态；`createdAt` 相同的条目保持「后发布的在前」（依赖稳定排序）。`GET /api/posts/:id` 的返回同样是副本。
+
+`like` 与 `bookmark` 是**切换**语义：同一条内容连点两次即回到初始状态，不需要客户端先判断当前状态再选 `PUT`/`DELETE`。两者无请求体，也不经过 `bodyLimit`；状态存在内容记录上，点赞与收藏互不影响。当前没有用户体系，因此 `liked` / `bookmarked` 是所有客户端共享的一份状态。
 
 ### curl 示例
 
@@ -191,16 +195,22 @@ store 只在 `NETWORK_ERROR` 时使用本地文案（`LOAD_ERROR` / `SAVE_ERROR`
 | `id` | `string` | `src/lib/uid.ts` 生成：36 进制时间戳 + `-` + 6 位随机后缀；同毫秒内碰撞时追加自增序号 |
 | `content` | `string` | 正文，服务端入库前已 `trim()` |
 | `createdAt` | `number` | 发布时间戳（毫秒） |
+| `likes` | `number` | 点赞数，非负整数，取消点赞时不会减到 0 以下 |
+| `liked` | `boolean` | 是否已点赞 |
+| `bookmarked` | `boolean` | 是否已收藏 |
 
 ```json
 {
   "id": "m3k9x1-a7f2c1",
   "content": "第一条想法",
-  "createdAt": 1763000000000
+  "createdAt": 1763000000000,
+  "likes": 3,
+  "liked": true,
+  "bookmarked": false
 }
 ```
 
-前端拿到响应后仍逐条收窄：`id` 必须是非空字符串、`content` 必须是字符串、`createdAt` 必须是有限数字，不合格的条目直接丢弃；整体形状不对则抛 `INVALID_RESPONSE`，页面不会白屏。
+前端拿到响应后仍逐条收窄：`id` 必须是非空字符串、`content` 必须是字符串、`createdAt` 必须是有限数字，不合格的条目直接丢弃；整体形状不对则抛 `INVALID_RESPONSE`，页面不会白屏。互动字段更宽松：`likes` 缺失或非法回退为 `0`，`liked` / `bookmarked` 只认字面 `true`，因此旧版服务端返回的数据也能正常渲染。
 
 ## 与原生 mini-blog 的差异
 
@@ -219,12 +229,15 @@ store 只在 `NETWORK_ERROR` 时使用本地文案（`LOAD_ERROR` / `SAVE_ERROR`
 
 功能对齐：140 字上限、码点计数、空内容禁用、`Ctrl/Cmd + Enter` 发布、新内容置顶、加载/失败/空状态、相对时间文案。
 
+Vue 版额外提供**点赞**与**收藏**：按钮乐观更新（先改本地再等服务端校正），失败自动回滚并内联提示；列表顶部可在「全部 / 收藏」之间切换，收藏数量实时统计。
+
 ## 已知限制
 
 - **内存存储**：无数据库、无文件落盘，`dev:server` 的 watch 重启或进程退出后内容全部丢失。
 - **单实例**：多进程、多副本部署时各自持有一份数据，客户端看到的列表取决于连到哪个进程。
 - **无鉴权**：任何能访问端口的人都能读和发；`cors()` 放行任意来源。
-- **无删除、无编辑接口**：目前只有读列表、读单条、发布三条业务路由。
+- **无删除、无编辑接口**：业务路由只有读列表、读单条、发布，以及点赞/收藏两个切换接口。
+- **互动状态无归属**：没有用户体系，`liked` / `bookmarked` 是全局唯一的一份状态，换设备、换浏览器看到的是同一个人的点赞与收藏。
 - **无分页**：`GET /api/posts` 一次返回全量，列表大了只能靠前端渲染扛。
 - **相对时间不自动刷新**：`PostItem` 在渲染时算一次，页面停留久了不会自己走字。
 - **无速率限制**：8KB 的 bodyLimit 只挡超大包，不挡高频提交。
